@@ -83,7 +83,20 @@ def read_fasta(amplicon_file: Path, minseqlen: int) -> Iterator[str]:
     :param minseqlen: (int) Minimum amplicon sequence length
     :return: A generator object that provides the Fasta sequences (str).
     """
-    pass
+    read = ""
+
+    with gzip.open(amplicon_file, "rt") as monfich :
+        for line in monfich :
+            line = line.strip()
+            if line.startswith(">"):
+                if read and len(read) >= minseqlen:
+                    yield read
+                read = ""
+            else :
+                read += line
+    if read and len(read) >= minseqlen: # Pour le dernier read, car pas de ">01626:..." après
+        yield read
+
 
 
 def dereplication_fulllength(amplicon_file: Path, minseqlen: int, mincount: int) -> Iterator[List]:
@@ -94,7 +107,21 @@ def dereplication_fulllength(amplicon_file: Path, minseqlen: int, mincount: int)
     :param mincount: (int) Minimum amplicon count
     :return: A generator object that provides a (list)[sequences, count] of sequence with a count >= mincount and a length >= minseqlen.
     """
-    pass
+    all_reads = read_fasta(amplicon_file, minseqlen)
+    read_counter = {}
+
+    for read in all_reads :
+        if read in read_counter:
+            read_counter[read] += 1
+        else :
+            read_counter[read] = 1
+
+    sorted_reads = sorted(read_counter.items(), key = lambda item:item[1], reverse= True)
+
+    for sequence, count in sorted_reads:
+        if count >= mincount :
+            yield [sequence, count]
+
 
 def get_identity(alignment_list: List[str]) -> float:
     """Compute the identity rate between two sequences
@@ -102,7 +129,17 @@ def get_identity(alignment_list: List[str]) -> float:
     :param alignment_list:  (list) A list of aligned sequences in the format ["SE-QUENCE1", "SE-QUENCE2"]
     :return: (float) The rate of identity between the two sequences.
     """
-    pass
+    sequence_1 = alignment_list[0]
+    sequence_2 = alignment_list[1]
+    identical = 0
+
+    for nucleotide_1, nucleotide_2 in zip(sequence_1, sequence_2) :
+        if nucleotide_1 == nucleotide_2 :
+            identical = identical + 1
+
+    id = identical / len(sequence_1) * 100
+    return id
+
 
 def abundance_greedy_clustering(amplicon_file: Path, minseqlen: int, mincount: int, chunk_size: int, kmer_size: int) -> List:
     """Compute an abundance greedy clustering regarding sequence count and identity.
@@ -115,7 +152,23 @@ def abundance_greedy_clustering(amplicon_file: Path, minseqlen: int, mincount: i
     :param kmer_size: (int) A fournir mais non utilise cette annee
     :return: (list) A list of all the [OTU (str), count (int)] .
     """
-    pass
+    OTU_list = []
+
+    for sequence, count in dereplication_fulllength(amplicon_file, minseqlen, mincount) :
+        is_OTU = True
+
+        for OTU_sequence, OTU_count in OTU_list :
+            alignment = nw.global_align(sequence, OTU_sequence, gap_open=-1, gap_extend= -1,
+                                        matrix = str(Path(__file__).parent/"MATCH"))
+            identity = get_identity(alignment)
+
+            if identity > 97:
+                is_OTU = False
+                break
+        if is_OTU:
+            OTU_list.append([sequence, count]) 
+
+    return OTU_list
 
 
 def write_OTU(OTU_list: List, output_file: Path) -> None:
@@ -124,8 +177,10 @@ def write_OTU(OTU_list: List, output_file: Path) -> None:
     :param OTU_list: (list) A list of OTU sequences
     :param output_file: (Path) Path to the output file
     """
-    pass
-
+    with open(output_file, "w") as file :
+        for numero, (sequence, count) in enumerate(OTU_list, start=1):
+            file.write(f">OTU_{numero} occurrence:{count}\n")
+            file.write(textwrap.fill(sequence, width=80) + "\n")
 
 #==============================================================
 # Main program
@@ -138,7 +193,14 @@ def main(): # pragma: no cover
     args = get_arguments()
     # Votre programme ici
 
-
+    OTU_list = abundance_greedy_clustering(
+        args.amplicon_file,
+        args.minseqlen,
+        args.mincount,
+        args.chunk_size,
+        args.kmer_size
+    )
+    write_OTU(OTU_list, args.output_file)
 
 if __name__ == '__main__':
     main()
